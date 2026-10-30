@@ -18,8 +18,7 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
     private var server: HTTPServer?
     private var webView: PassiveWebView?
     private var isRunning = false
-
-    private static let logFileName = "saver.log"
+    private var optionsWindow: OptionsWindow?
 
     // MARK: - Init
 
@@ -44,28 +43,9 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
         Bundle(for: OSRSMapSaverView.self)
     }
 
-    /// The screen saver runs inside the sandboxed `legacyScreenSaver` app extension,
-    /// where `NSHomeDirectory()` is the extension container - not the user's home.
-    /// Caches are installed in the real home, logs go to the (writable) container.
-    static var realHomeDirectory: String {
-        if let entry = getpwuid(getuid()) {
-            return String(cString: entry.pointee.pw_dir)
-        }
-        return NSHomeDirectory()
-    }
-
-    private var supportDirectory: URL {
-        URL(fileURLWithPath: Self.realHomeDirectory)
-            .appendingPathComponent("Library/Application Support/OSRSMapSaver", isDirectory: true)
-    }
-
-    private var logFileURL: URL {
-        let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
-        let directory = base.appendingPathComponent("Logs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent(Self.logFileName)
-    }
+    /// Sandbox-safe paths (caches in the real home, logs in the container).
+    private var supportDirectory: URL { SaverPaths.supportDirectory }
+    private var logFileURL: URL { SaverPaths.logFileURL }
 
     /// The system creates one saver view per display. Rendering two full viewers
     /// doubles the GPU work (and the heat), so when an external display is
@@ -108,48 +88,75 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
     private var debugEnabled: Bool {
         let flags = [
             supportDirectory.appendingPathComponent("debug"),
-            URL(fileURLWithPath: Self.realHomeDirectory)
+            URL(fileURLWithPath: SaverPaths.realHome)
                 .appendingPathComponent("Documents/osrs_map_screensaver/macos/build/debug"),
         ]
         return flags.contains { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// Caches live outside the bundle (they are ~250 MB) so the plugin stays small.
-    private func locateCaches() -> URL? {
-        let candidates: [URL?] = [
-            supportDirectory.appendingPathComponent("caches", isDirectory: true),
-            saverBundle.resourceURL?.appendingPathComponent("caches", isDirectory: true),
-            URL(fileURLWithPath: Self.realHomeDirectory)
-                .appendingPathComponent("Documents/osrs_map_screensaver/repo/caches", isDirectory: true),
-        ]
-
-        for candidate in candidates {
-            guard let candidate else { continue }
-            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("caches.json").path) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
-    private func locateWebRoot() -> URL? {
-        let candidates: [URL?] = [
-            saverBundle.resourceURL?.appendingPathComponent("web", isDirectory: true),
-            URL(fileURLWithPath: Self.realHomeDirectory)
-                .appendingPathComponent("Documents/osrs_map_screensaver/repo/build", isDirectory: true),
-        ]
-        for candidate in candidates {
-            guard let candidate else { continue }
-            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("index.html").path) {
-                return candidate
-            }
-        }
-        return nil
-    }
+    private func locateCaches() -> URL? { SaverPaths.cachesDirectory(bundle: saverBundle) }
+    private func locateWebRoot() -> URL? { SaverPaths.webRoot(bundle: saverBundle) }
 
     // MARK: - ScreenSaverView
 
-    override var hasConfigureSheet: Bool { false }
+    override var hasConfigureSheet: Bool { true }
+
+    /// The host runs this window as a sheet; it is retained here so repeated
+    /// visits to System Settings reuse the same instance.
+    override var configureSheet: NSWindow? {
+        if optionsWindow == nil {
+            let caches = CacheOption.load(bundle: saverBundle)
+            let window = OptionsWindow(settings: SaverSettings.load(), caches: caches)
+            window.onFinish = { [weak self] saved in
+                self?.finishOptions(saved: saved)
+            }
+            optionsWindow = window
+
+            SaverLog.append(
+                "configure sheet built: caches=\(caches.map(\.name)) "
+                    + "screenSaverDefaults=\(SaverSettings.usesScreenSaverDefaults) "
+                    + "prefs=\(SaverSettings.preferenceFiles())"
+            )
+        } else {
+            // System Settings may reopen the sheet without recreating the view.
+            optionsWindow?.reload(settings: SaverSettings.load(), caches: CacheOption.load(bundle: saverBundle))
+        }
+        return optionsWindow
+    }
+
+    /// Called by the Options window when the user presses OK or Cancel.
+    /// The sheet has to be ended by us: the host only begins it.
+    private func finishOptions(saved: Bool) {
+        guard let window = optionsWindow else { return }
+        if let parent = window.sheetParent {
+            parent.endSheet(window)
+        } else {
+            NSApp.endSheet(window)
+        }
+        window.orderOut(nil)
+
+        guard saved else {
+            SaverLog.append("configure sheet cancelled")
+            return
+        }
+        let settings = SaverSettings.load()
+        SaverLog.append(
+            "settings saved: \(settings.queryString(isPreview: false, debugFileEnabled: debugEnabled)) "
+                + "prefs=\(SaverSettings.preferenceFiles())"
+        )
+        restartWebContent()
+    }
+
+    /// Rebuilds the query string from the saved settings without stopping the saver.
+    private func restartWebContent() {
+        guard isRunning else { return }
+        webView?.stopLoading()
+        webView?.removeFromSuperview()
+        webView = nil
+        server?.stop()
+        server = nil
+        startWebContent()
+    }
 
     override func startAnimation() {
         super.startAnimation()
@@ -234,10 +241,9 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
         addSubview(webView)
         self.webView = webView
 
-        var query = "ambient=1&saver=1"
-        if isPreview { query += "&preview=1" }
-        if debugEnabled { query += "&debug=1" }
-        if let quality = SaverSettings.fpsLimit { query += "&fps=\(quality)" }
+        let settings = SaverSettings.load()
+        let query = settings.queryString(isPreview: isPreview, debugFileEnabled: debugEnabled)
+        server.log("settings \(query)")
 
         if let url = URL(string: "http://127.0.0.1:\(port)/?\(query)") {
             server.log("loading \(url.absoluteString)")
@@ -317,13 +323,6 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
         }
         return .default()
     }
-}
-
-// MARK: - Settings
-
-enum SaverSettings {
-    /// TODO: read from ScreenSaverDefaults once we add a configure sheet.
-    static var fpsLimit: Int? { nil }
 }
 
 // MARK: - Injected scripts
