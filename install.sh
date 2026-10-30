@@ -5,6 +5,10 @@
 #   ./install.sh --source    same thing, explicit
 #   ./install.sh --binary    download the prebuilt .saver from GitHub Releases
 #   ./install.sh --caches    only (re)download the RuneScape caches
+#   ./install.sh --offline <archive.tar.zst>   restore caches from a local snapshot
+#
+# Combine --offline with --binary or --source to install without touching the
+# network for the 250 MB cache download (see scripts/caches-backup.sh).
 #
 # Source mode needs Node.js (>=18) and Xcode Command Line Tools.
 # Binary mode needs only curl, unzip and python3.
@@ -20,19 +24,24 @@ SUPPORT="$HOME/Library/Application Support/OSRSMapSaver"
 CACHE_DIR="$SUPPORT/caches"
 
 MODE="source"
-case "${1:-}" in
-    --binary) MODE="binary" ;;
-    --source|"") MODE="source" ;;
-    --caches) MODE="caches-only" ;;
-    -h|--help)
-        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
-        exit 0
-        ;;
-    *)
-        echo "unknown option: $1 (try --help)" >&2
-        exit 1
-        ;;
-esac
+OFFLINE_ARCHIVE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --binary) MODE="binary" ;;
+        --source) MODE="source" ;;
+        --caches) MODE="caches-only" ;;
+        --offline) shift; OFFLINE_ARCHIVE="${1:?--offline needs an archive path}" ;;
+        -h|--help)
+            sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "unknown option: $1 (try --help)" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 say() { printf '==> %s\n' "$*"; }
 
@@ -45,9 +54,39 @@ install_bundle() {
     xattr -dr com.apple.quarantine "$DESTINATION/OSRSMapSaver.saver" 2>/dev/null || true
 }
 
+restore_caches_archive() {
+    local archive="$1"
+    [ -f "$archive" ] || { echo "error: archive not found: $archive" >&2; exit 1; }
+
+    say "Restoring caches from $archive"
+    local staging
+    staging="$(mktemp -d)"
+    if ! tar -xf "$archive" -C "$staging" 2>/dev/null; then
+        rm -rf "$staging"
+        echo "error: cannot read $archive (tar cannot handle the format?)" >&2
+        exit 1
+    fi
+    if [ ! -f "$staging/caches/caches.json" ]; then
+        rm -rf "$staging"
+        echo "error: unexpected archive layout (no caches/caches.json)" >&2
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "$CACHE_DIR")"
+    rm -rf "$CACHE_DIR"
+    mv "$staging/caches" "$CACHE_DIR"
+    rm -rf "$staging"
+    say "Caches restored ($(du -sh "$CACHE_DIR" | cut -f1))"
+}
+
 fetch_caches() {
     if [ -f "$CACHE_DIR/caches.json" ]; then
         say "Caches already present in $CACHE_DIR"
+        return
+    fi
+
+    if [ -n "$OFFLINE_ARCHIVE" ]; then
+        restore_caches_archive "$OFFLINE_ARCHIVE"
         return
     fi
 
@@ -79,6 +118,13 @@ then press "Options..." to tune the camera, pacing and which cache to use.
 
   ./preview.sh                     same viewer in a browser (fast iteration)
   macos/build.sh install           rebuild only the native bundle
+
+The 250 MB of map data lives in:
+  ~/Library/Application Support/OSRSMapSaver/caches
+Snapshot it (so a reinstall never needs archive.openrs2.org again):
+  ./scripts/caches-backup.sh create
+Restore it later:
+  ./install.sh --offline ~/Documents/osrs_map_screensaver-offline/osrs-caches-YYYY-MM-DD.tar.zst
 EOF
 }
 
@@ -102,10 +148,14 @@ case "$MODE" in
 
         install_bundle "$work/OSRSMapSaver.saver"
 
-        if [ -f "$work/fetch-caches.py" ] && [ ! -f "$CACHE_DIR/caches.json" ]; then
-            mkdir -p "$CACHE_DIR"
-            say "Downloading RuneScape caches (~250 MB, one time)"
-            python3 "$work/fetch-caches.py" --dir "$CACHE_DIR"
+        if [ ! -f "$CACHE_DIR/caches.json" ]; then
+            if [ -n "$OFFLINE_ARCHIVE" ]; then
+                restore_caches_archive "$OFFLINE_ARCHIVE"
+            elif [ -f "$work/fetch-caches.py" ]; then
+                mkdir -p "$CACHE_DIR"
+                say "Downloading RuneScape caches (~250 MB, one time)"
+                python3 "$work/fetch-caches.py" --dir "$CACHE_DIR"
+            fi
         fi
 
         restart_host

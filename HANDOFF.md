@@ -293,10 +293,15 @@ whenever the sheet is built or saved, so this stays verifiable.
   `WKWebView`). Current policy avoids the cost by playing on one display only.
 - First launch in the saver downloads the cache into WebKit's container
   (a few seconds from localhost). Nothing prefetches it for the user.
-- On *this* machine the caches are still behind a symlink to `repo/caches`
-  (`~/Library/Application Support/OSRSMapSaver/caches`); `install.sh` now copies
-  them into the support directory for fresh installs. If the repo moves here,
-  replace the symlink with a real copy (`rm` + `./install.sh --caches`).
+- The support-directory caches used to be a symlink into `repo/caches`; they are
+  now a real copy (so deleting/moving the checkout cannot break the saver).
+  `repo/caches` still exists for `preview.sh`/`serve.mjs` — two independent copies,
+  ~250 MB each.
+- Offline snapshots: `scripts/caches-backup.sh create|verify|restore` writes a
+  `.tar.zst` (~209 MB, 83% of raw — the Jagex data is already compressed) plus a
+  `.sha256` sidecar to `~/Documents/osrs_map_screensaver-offline/`.
+  `install.sh --offline <archive>` restores it, and macOS `tar` reads `.tar.zst`
+  with no extra tools, so a reinstall needs no Node and no network for the caches.
 - `legacyScreenSaver` sometimes gets (re)spawned by `wallpaper.agent` and keeps
   the saver running as a wallpaper after unlock — macOS 26 behaviour, not ours.
 - Flight/camera tunables are hard-coded; making motion weights and speed

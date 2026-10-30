@@ -47,6 +47,38 @@ compiles the universal (arm64 + x86_64) `.saver` and copies it to
 Then: **System Settings → Screen Saver → RuneScape World**. Press **Options…** to
 tune it.
 
+## Offline use & cache backups
+
+The screen saver never touches the network: the viewer talks to the bundled HTTP
+server, which serves the map data from disk. The only download in the whole
+project is the one-time cache fetch during install (archive.openrs2.org, ~250 MB),
+into:
+
+```
+~/Library/Application Support/OSRSMapSaver/caches
+```
+
+Keep a snapshot of it, so a reinstall still works if that archive site is slow,
+moves or disappears:
+
+```sh
+./scripts/caches-backup.sh create                  # ~/Documents/osrs_map_screensaver-offline/osrs-caches-YYYY-MM-DD.tar.zst
+./scripts/caches-backup.sh verify  <archive>       # checksum + contents + revisions
+./scripts/caches-backup.sh restore <archive> --force
+```
+
+Or reinstall straight from a snapshot — only `tar` and `python3` are needed, and
+the caches are never fetched from the internet:
+
+```sh
+./install.sh --binary  --offline ~/Documents/osrs_map_screensaver-offline/osrs-caches-2026-10-30.tar.zst
+./install.sh --caches  --offline <archive>         # just repair the cache folder
+```
+
+An archive is `caches.json` plus one directory per revision (`osrs-241_2026-10-28`,
+`rs2-295_2005-02-21`) holding the raw `main_file_cache.*` files and `keys.json`.
+macOS `tar` reads `.tar.zst` natively, so no extra tools are required to restore.
+
 ## Options
 
 The standard macOS configure sheet, everything written as clamped values:
@@ -129,6 +161,7 @@ macos/Saver/          ScreenSaverView, WKWebView, HTTP server, options sheet
 macos/Host/           dev harness app (runs the .saver in a window)
 macos/build.sh        builds OSRSMapSaver.saver (+ harness), optional install
 scripts/fetch-caches.py   dependency-free cache downloader (python3 stdlib)
+scripts/caches-backup.sh  snapshot / verify / restore the caches offline
 install.sh            install from source or from the prebuilt release
 preview.sh            the same viewer in a browser, for fast iteration
 media/                banner.gif / banner.webm / banner.mp4
@@ -185,13 +218,16 @@ damaged. `xattr -dr com.apple.quarantine ~/Library/Screen\ Savers/OSRSMapSaver.s
 (or use `./install.sh --binary`, which curls it instead).
 
 **Wrong RuneScape revision / empty cache list.** `./install.sh --caches` re-downloads
-the caches; the Options sheet lists whatever is in `caches.json`.
+the caches; the Options sheet lists whatever is in `caches.json`. With a snapshot,
+`./install.sh --caches --offline <archive>` restores it instead.
 
 ## Uninstall
 
 ```sh
 rm -rf ~/Library/Screen\ Savers/OSRSMapSaver.saver
 rm -rf ~/Library/Application\ Support/OSRSMapSaver        # caches, ~250 MB
+# keep a snapshot first if you might reinstall:
+#   ./scripts/caches-backup.sh create
 defaults -currentHost delete org.osrsmapsaver.saver 2>/dev/null
 ```
 
