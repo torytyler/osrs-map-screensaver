@@ -1,37 +1,101 @@
+![RuneScape World screen saver](media/banner.gif)
+
 # RuneScape World — macOS screen saver
 
-An ambient screen saver built on [dennisdev/rs-map-viewer](https://github.com/dennisdev/rs-map-viewer)
-(the engine behind <https://osrs.world>). It flies a camera around the real
-RuneScape world: it lands in a random zone, slowly orbits/pans/pushes in (or
-follows a wandering NPC), then flies to the next zone and does it again.
+Your Mac unlocks to a slow, silent flight over Gielinor instead of a stock
+aquarium.
+
+The saver hosts the real RuneScape map viewer
+([dennisdev/rs-map-viewer](https://github.com/dennisdev/rs-map-viewer), the engine
+behind <https://osrs.world>) in a `WKWebView` and drives it with an "ambient"
+camera: pick one of ~75 hand-picked zones, fly there (or cross-fade if it is far
+away), hold an `orbit` / `pan` / `drift` / `push` move for a while — or follow a
+wandering NPC — then move on. Every few zones it swaps the modern cache for the
+February 2005 one, so the same tour occasionally plays out on the game world as it
+looked back then.
+
+It renders the actual Jagex cache with the upstream WebGL2 engine (workers, WASM,
+`CacheStorage`), capped at 30 fps.
+
+## Install
+
+### Prebuilt (no build tools)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/torytyler/osrs-map-screensaver/main/install.sh \
+  | bash -s -- --binary
+```
+
+Downloads the signed (ad-hoc) `.saver` plus a `python3`-only cache fetcher, and
+pulls the RuneScape caches (~250 MB, one time) into
+`~/Library/Application Support/OSRSMapSaver/caches`.
+
+### From source
+
+Needs Node.js 18+ and the Xcode Command Line Tools.
+
+```sh
+git clone https://github.com/torytyler/osrs-map-screensaver.git
+cd osrs-map-screensaver
+./install.sh
+```
+
+`install.sh` clones the viewer fork, builds the React app, fetches the caches,
+compiles the universal (arm64 + x86_64) `.saver` and copies it to
+`~/Library/Screen Savers`.
+
+Then: **System Settings → Screen Saver → RuneScape World**. Press **Options…** to
+tune it.
+
+## Options
+
+The standard macOS configure sheet, everything written as clamped values:
+
+| section | controls |
+| --- | --- |
+| World | which cache to use (any installed revision), era rotation (`current + 2005`, `current only`, `2005 only`), how often the era switches |
+| Pacing | scene duration (5–300 s), cross-fade for long jumps |
+| Camera | frame rate, render distance, fog band, sky colour, zone caption |
+| Motion | how often a scene follows an NPC, the jump-cut distance window |
+| Advanced | in-page debug HUD, reset to defaults |
+
+Values are stored per-machine in the screen saver container:
 
 ```
-osrs_map_screensaver/
-├── repo/                 fork of rs-map-viewer (web app + ambient mode)
-│   ├── src/ambient/      the screen saver camera engine (new)
-│   └── scripts/          fetch-cache.mjs, serve.mjs (local static + cache server)
-├── macos/
-│   ├── Saver/            ScreenSaverView + WKWebView + embedded HTTP server
-│   ├── Host/             dev harness app (runs the .saver in a window)
-│   └── build.sh          builds OSRSMapSaver.saver, installs it
-├── install.sh            full install (web build → caches → .saver)
-└── preview.sh            run the same thing in a browser for fast iteration
+~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Preferences/ByHost/org.osrsmapsaver.saver.<UUID>.plist
 ```
 
-Picking this up cold? Read **[HANDOFF.md](HANDOFF.md)** — file map, the two
-macOS gotchas that cost the most time, every tunable, and the plan for the native
-Options sheet.
+Pressing OK reloads the viewer in place (about 150 ms — the map data comes from
+WebKit's `CacheStorage`).
+
+## Ambient URL parameters
+
+Opt-in, so the normal viewer is untouched — append them to any viewer URL
+(`./preview.sh "ambient=1&distance=224&debug=1"`).
+
+| param | default | meaning |
+| --- | --- | --- |
+| `ambient` | – | `1` enables it; a zone name pins that zone (`?ambient=Lumbridge`) |
+| `dwell` | `30` | seconds parked in a scene (timer starts on arrival) |
+| `fade` | `1` | cross-fade seconds for long jumps |
+| `fps` | `30` | frame cap (`20` in the System Settings preview pane) |
+| `distance` | `320` | render distance in tiles (`192` in the preview pane) |
+| `fog` | `96` | fog band at the edge of the render distance |
+| `sky` | `0x000000` | sky/fog colour |
+| `npc` | `0.5` | chance a scene follows a wandering NPC |
+| `era` | `mixed` | `latest`, `legacy` (2005 cache) or `mixed` |
+| `eraevery` | `4` | zones between era switches |
+| `minflight` / `maxflight` | `140` / `950` | distance window where we fly instead of cut |
+| `labels` | `1` | zone name caption |
+| `debug` | `0` | state/FPS overlay |
+| `seed` | random | deterministic zone rotation |
+| `lite` | – | low-cost profile (1 worker) |
 
 ## How it works
 
-macOS still supports legacy `.saver` bundles, but on modern macOS they are
-loaded into `ScreenSaver.framework/PlugIns/legacyScreenSaver.appex` — a
-**sandboxed** app extension. That sandbox allows reading anywhere, listening on
-a local port and WebKit, which is exactly what this design needs.
-
 ```
 ScreenSaverEngine
-└── legacyScreenSaver.appex  (sandboxed)
+└── legacyScreenSaver.appex  (sandboxed app extension)
     └── OSRSMapSaver.saver
         ├── ScreenSaverView → WKWebView
         └── HTTPServer (Network.framework, 127.0.0.1:<random>)
@@ -39,123 +103,105 @@ ScreenSaverEngine
               └── /caches/*  → ~/Library/Application Support/OSRSMapSaver/caches
 ```
 
-A local HTTP server is used instead of `file://` because the viewer needs a real
-origin for workers, WASM, `CacheStorage`, `SharedArrayBuffer` (COOP/COEP) and
-HTTP `Range` requests. The RS cache (~213 MB for current OSRS) is downloaded once
-and then cached inside WebKit's container, so later launches start immediately.
+A tiny embedded HTTP server (instead of `file://`) gives the viewer a real origin,
+which it needs for workers, WASM, `CacheStorage`, `SharedArrayBuffer` (COOP/COEP)
+and HTTP `Range` requests.
 
-The renderer itself is the upstream WebGL2 engine: it parses the actual Jagex
-cache and streams map squares in web workers.
+The ambient engine lives in the viewer fork under `src/ambient/`:
 
-## Install
+- `zones.ts` — ~75 hand-picked places with a radius and preferred camera height.
+- `scenes.ts` — motion models (`orbit`, `pan`, `drift`, `push`, `npc`) as pure
+  functions of time, so nothing drifts; plus the flight path and landing pose.
+  Every scene starts exactly on the pose a flight lands on.
+- `NpcFinder.ts` — picks a nearby NPC from the loaded map squares and tracks it
+  live (NPCs wander and animate in the upstream engine).
+- `cameraMath.ts` — RS angle/yaw/pitch conversions and a `PoseSmoother` low-pass,
+  so map-streaming hitches and NPC tile steps never show as jitter.
+- `AmbientDirector.ts` — the state machine `black → dwell → (flight | fade) → …`,
+  scene selection, prefetching along the flight path, era switching.
+- `AmbientOverlay.ts` — fade-to-black, zone caption, debug HUD (plain DOM, no
+  React re-renders).
 
-```sh
-./install.sh
+## Repository layout
+
+```
+macos/Saver/          ScreenSaverView, WKWebView, HTTP server, options sheet
+macos/Host/           dev harness app (runs the .saver in a window)
+macos/build.sh        builds OSRSMapSaver.saver (+ harness), optional install
+scripts/fetch-caches.py   dependency-free cache downloader (python3 stdlib)
+install.sh            install from source or from the prebuilt release
+preview.sh            the same viewer in a browser, for fast iteration
+media/                banner.gif / banner.webm / banner.mp4
+HANDOFF.md            deep notes: file map, a full list of tunables, gotchas
 ```
 
-Then System Settings → Screen Saver → **RuneScape World**.
+The viewer itself is a separate repository:
+[torytyler/rs-map-viewer](https://github.com/torytyler/rs-map-viewer) (fork of
+`dennisdev/rs-map-viewer`), which `install.sh` clones into `repo/`.
 
 ## Dev loop
 
 ```sh
-./preview.sh                                  # browser, hot-reloadable build
+./preview.sh                                   # browser, hot-reloadable
 ./preview.sh "ambient=1&zone=Varrock%20Square&debug=1"
+
+(cd repo && npm run build)                     # just the web app
+macos/build.sh install                         # just the native bundle
+macos/build/OSRSMapSaverHarness.app/Contents/MacOS/OSRSMapSaverHarness \
+  "$PWD/macos/build/OSRSMapSaver.saver" --quit-after 120
 ```
 
-Screen saver bundle without the real screen saver:
-
-```sh
-(cd repo && npm run build)
-macos/build.sh                 # build .saver + harness
-open macos/build/OSRSMapSaverHarness.app --args "$PWD/macos/build/OSRSMapSaver.saver" --quit-after 120
-```
-
-Logs: `~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Logs/OSRSMapSaver.log`
-(or `/tmp/osrs-preview.log` when using `preview.sh`).
-
-## Ambient URL parameters
-
-| param | default | meaning |
-| --- | --- | --- |
-| `ambient` | – | `1` enables; a zone name pins that zone (`?ambient=Lumbridge`) |
-| `dwell` | `30` | seconds parked in a scene (timer starts on arrival) |
-| `fade` | `1` | cross-fade seconds for long jumps |
-| `fps` | `30` | frame cap |
-| `distance` | `320` | render distance in tiles (`192` in the preview pane) |
-| `fog` | `96` | fog band at the edge of the render distance |
-| `sky` | `0x000000` | sky/fog colour |
-| `npc` | `0.5` | chance a scene follows a wandering NPC |
-| `era` | `mixed` | `latest`, `legacy` (2005 cache) or `mixed` (switch every few zones) |
-| `eraevery` | `4` | zones between era switches |
-| `lite` | – | low-cost profile (1 worker) |
-| `minflight` / `maxflight` | `140` / `950` | distance window where we fly instead of cut |
-| `labels` | `1` | zone name caption |
-| `debug` | `0` | state/FPS overlay |
-| `seed` | random | deterministic zone rotation |
-
-## The ambient camera engine
-
-`repo/src/ambient/`:
-
-- `zones.ts` — ~75 hand-picked places with a radius and preferred camera height.
-- `scenes.ts` — motion models (`orbit`, `pan`, `drift`, `push`, `npc`) that are
-  pure functions of time, so nothing drifts; plus the flight path and landing
-  pose. Every scene starts exactly on the pose a flight lands on.
-- `NpcFinder.ts` — picks a nearby NPC from the loaded map squares and tracks it
-  live (NPCs wander and animate in the upstream engine).
-- Era rotation swaps the OSRS cache for the Feb-2005 cache (`rs2-295`) every few
-  zones, restricted to the zones that existed back then.
-- `AmbientDirector.ts` — the state machine: `black → dwell → (flight | fade-out)
-  → …`, scene selection, prefetching along the flight path, debug state.
-- `AmbientOverlay.ts` — fade-to-black, zone caption, debug HUD (plain DOM, no
-  React re-renders).
-
-Hooks into the upstream app are small and opt-in (`?ambient=…`), so the normal
-map viewer keeps working unchanged:
-
-- `MapViewer.ambient` disables camera→URL mirroring.
-- `MapViewerRenderer.handleInput()` delegates to the director instead of input.
-- `MapViewerContainer` hides the HUD/menus and skips React state churn.
+The harness takes `--fullscreen`, `--quit-after <s>`, `--hide-after <s>`,
+`--cover-after <s>` (reproduces the occlusion bug) and, for the options sheet,
+`--show-options`, `--options-edit`, `--options-ok-after <s>`,
+`--options-cancel-after <s>`, `--options-screenshot <path>`.
 
 ## Troubleshooting
 
-The interesting one: on macOS 26+ legacy savers are hosted by the sandboxed
-`legacyScreenSaver` app extension, whose window WebKit classifies as **occluded**.
-That silently stops `requestAnimationFrame` and throttles timers to 1 Hz, which
-looks exactly like a black screen while the cache loads fine. The saver disables
-that heuristic with WebKit's private `_setWindowOcclusionDetectionEnabled:` and
-`Renderer` additionally falls back to a timer loop if rAF ever starves.
+**Black screen, cache loads fine.** On macOS 26+ legacy savers run inside the
+sandboxed `legacyScreenSaver` app extension, whose window WebKit classifies as
+*occluded* — which silently stops `requestAnimationFrame` and throttles timers.
+The saver disables that heuristic (`_setWindowOcclusionDetectionEnabled:`) and the
+renderer falls back to a timer loop if rAF ever starves.
 
-Diagnostics land in
-`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Logs/saver.log`
-(every request, page state, a 5 s heartbeat with the camera/zone/phase).
-`?debug=1` (or a `debug` file in `~/Library/Application Support/OSRSMapSaver/`)
-shows the state overlay and enables the Web Inspector. `OSRS_SAVER_NO_OCCLUSION_FIX=1`
-disables the fix for A/B testing.
+**Where are the logs?**
 
-The system creates one saver view per display, and each view is a full WebGL
-viewer. Rendering two of them doubles the GPU work and the heat, so when an
-external display is connected **only that display plays** and the built-in panel
-stays black (`shouldPlayOnThisDisplay` in `OSRSMapSaverView.swift`). With a single
-display, it plays there. `OSRS_SAVER_FORCE_PLAY=1` overrides this for the dev
-harness.
+```sh
+tail -f ~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Logs/saver.log
+```
 
-Flights cruise at 15-24 tiles/s (9-34 s), every pose is low-passed through
-`PoseSmoother` so map hitches and NPC tile steps never show as jitter, and the
-followed NPC's position is smoothed separately.
+Every request, page state, configure-sheet activity and a 5 s heartbeat with
+zone/phase/camera. `?debug=1` (or a `debug` file in
+`~/Library/Application Support/OSRSMapSaver/`) shows an on-screen state overlay and
+enables the Web Inspector.
 
-## Notes / next steps
+**Two displays.** Each display gets its own saver view, and each view is a full
+WebGL viewer, so rendering both doubles GPU work and heat. When an external
+display is present only that one plays and the built-in panel stays black.
+`OSRS_SAVER_FORCE_PLAY=1` overrides it (the dev harness sets it).
 
-- First launch in the screen saver downloads the cache into WebKit's container
-  (from localhost, a few seconds). Later launches are instant.
-- Two displays = two independent savers with different seeds, each with its own
-  server and renderer.
-- Values worth tweaking: `dwell`, `fog`, `sky`, `distance`, `npc`, and in
-  `zones.ts` the per-zone `height`/`radius`.
+**Downloaded via a browser?** macOS quarantines the `.saver` and may call it
+damaged. `xattr -dr com.apple.quarantine ~/Library/Screen\ Savers/OSRSMapSaver.saver`
+(or use `./install.sh --binary`, which curls it instead).
+
+**Wrong RuneScape revision / empty cache list.** `./install.sh --caches` re-downloads
+the caches; the Options sheet lists whatever is in `caches.json`.
+
+## Uninstall
+
+```sh
+rm -rf ~/Library/Screen\ Savers/OSRSMapSaver.saver
+rm -rf ~/Library/Application\ Support/OSRSMapSaver        # caches, ~250 MB
+defaults -currentHost delete org.osrsmapsaver.saver 2>/dev/null
+```
 
 ## Credits
 
-- dennisdev/rs-map-viewer (MIT) — the viewer/renderer this is based on.
-- Jagex, RuneLite, OpenRS2 Archive, 2004scape, 2009scape and the OSRS Wiki for
-  the data and caches.
-- RuneScape content © Jagex Ltd.
+- [dennisdev/rs-map-viewer](https://github.com/dennisdev/rs-map-viewer) (BSD
+  2-Clause) — the viewer and WebGL2 renderer this is built on.
+- Jagex, RuneLite, the [OpenRS2 archive](https://archive.openrs2.org), 2004scape,
+  2009scape and the OSRS Wiki for the data and caches.
+- RuneScape content © Jagex Ltd. This project is unofficial and not affiliated
+  with Jagex.
+
+BSD 2-Clause — see [LICENSE](LICENSE).

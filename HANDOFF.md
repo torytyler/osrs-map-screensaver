@@ -160,13 +160,14 @@ layer (behind the desktop, black on the lock screen). That was tried and removed
 - **Display policy:** one view per display; when an external display exists only
   that one plays and the built-in panel stays black
   (`shouldPlayOnThisDisplay`). `OSRS_SAVER_FORCE_PLAY=1` overrides (harness sets it).
-- URL query currently built in `startWebContent()`:
-  `ambient=1&saver=1` + `&preview=1` (`isPreview`) + `&debug=1` (if the debug flag
-  exists) + optional `&fps=`.
+- URL query is built by `SaverSettings.queryString(isPreview:debugFileEnabled:)`
+  from the saved prefs: `ambient=1&saver=1` + `preview=1` (preview pane, which also
+  caps fps at 20 and distance at 192) + `debug=1` (debug flag **or** the sheet's
+  HUD toggle) + every knob in §6, plus `cache=` when a specific cache is chosen.
 - Debug flag file: `~/Library/Application Support/OSRSMapSaver/debug` → shows the
   state HUD **and** enables the Web Inspector (`isInspectable`).
-- `SaverSettings.fpsLimit` is a placeholder — this is the natural place to read
-  real preferences (see §7).
+- Preferences: `ScreenSaverDefaults`, domain `org.osrsmapsaver.saver`, stored in
+  the host container (see §7.2). `SaverSettings.load()/save()` clamp everything.
 
 `macos/build.sh`: `swiftc -emit-library` universal (arm64 + x86_64) → `.saver`
 bundle, copies `build/` into `Contents/Resources/web`, ad-hoc codesigns, builds
@@ -214,124 +215,77 @@ options UI. Nothing else needed.
 
 ---
 
-## 7. NEXT TASK — native "Options…" sheet (very customizable)
+## 7. DONE — native "Options…" sheet
 
-Goal: the standard macOS screen saver options sheet (the “Options…” button in
-System Settings), from which the user can tune almost everything, including which
-cache to use.
+Implemented and verified end to end (harness **and** the real host). Files:
 
-### 7.1 The AppKit contract (verified against the macOS 27 SDK)
+| file | role |
+| --- | --- |
+| `macos/Saver/SaverSettings.swift` | `SaverPaths`, `CacheOption` (reads `caches.json`), `EraMode`, `SaverSettings` (14 clamped knobs, tolerant readers for hand-written prefs), the URL query builder, `SaverLog` |
+| `macos/Saver/OptionsWindow.swift` | programmatic `NSWindow` sheet: `NSGridView` rows, `NSSlider` + readout, `NSPopUpButton`, `NSColorWell`, `NSSwitch`, Cancel/OK, Reset to Defaults |
+| `macos/Saver/OSRSMapSaverView.swift` | `hasConfigureSheet`/`configureSheet`, query from settings, hot restart on save |
 
-```swift
-// ScreenSaverView.h
-@property (readonly) BOOL hasConfigureSheet;
-@property (readonly, strong) NSWindow * _Nullable configureSheet;
-```
+### 7.1 What was verified, and how
 
-- Override `hasConfigureSheet` → `true`.
-- Override `configureSheet` → return a window (build it programmatically or from
-  a NIB). The system runs it as a sheet; the window must contain its own
-  **Cancel** / **OK** (or "Done") buttons.
+`SSEHasConfigureSheet => true` is already declared by
+`/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver.appex`,
+so legacy sheets are supported. Confirmed on this machine:
 
-```swift
-// OSRSMapSaverView.swift (currently `hasConfigureSheet` returns false)
-override var hasConfigureSheet: Bool { true }
+- System Settings → Screen Saver → RuneScape World → **Options…** shows the sheet.
+- Sliders/popups/colour well/switch edits reach the viewer: the save logged
+  `distance=512&fog=0&sky=35583&era=legacy&cache=rs2-295_2005-02-21`.
+- Cancel dismisses without writing; OK saves and reloads the web view (~150 ms,
+  map data comes from `CacheStorage`).
+- System Settings creates a **fresh view per visit**, so `configureSheet` is built
+  again each time (the retained-instance branch rarely runs there).
 
-override var configureSheet: NSWindow? {
-    if optionsWindow == nil { optionsWindow = OptionsWindow(settings: .load()) }
-    return optionsWindow
-}
-```
-- End the modal session yourself, exactly as documented:
+Harness flags added for this (`macos/Host/main.swift`): `--show-options`,
+`--options-edit`, `--options-ok-after <s>`, `--options-cancel-after <s>`,
+`--options-screenshot <path>`. `--options-edit` drives the real controls (sliders,
+popups, colour well, switch) and then presses OK, which is the end-to-end test.
 
-```swift
-NSApp.endSheet(sheetWindow)          // or beginSheet/endSheet pair
-sheetWindow.orderOut(nil)
-```
+### 7.2 Where the preferences live (answered)
 
-- The host (`legacyScreenSaver.appex`) declares
-  `SSEHasConfigureSheet = true` and
-  `ScreenSaverConfigurationSheetViewControllerClass = LegacyConfigurationViewController`,
-  so legacy sheets are supported in the extension. **Not yet tested on this
-  machine** — first thing to validate:
-
-```sh
-# quick smoke test without System Settings:
-macos/build/OSRSMapSaverHarness.app/Contents/MacOS/OSRSMapSaverHarness "$PWD/macos/build/OSRSMapSaver.saver"
-# then: instantiate the view, call view.configureSheet, present it as a sheet
-#       from the harness window (add a --show-options flag to Host/main.swift).
-```
-
-### 7.2 Where to store the preferences
-
-Use `ScreenSaverDefaults(forModuleWithName: "org.osrsmapsaver.saver")` (a
-subclass of `NSUserDefaults` that isolates per-module prefs). Use
-`register(defaults:)` for the defaults table so the UI can rely on all keys
-existing, then `synchronize()` on save.
-
-Caveat to verify early: inside the sandboxed appex these prefs may be redirected
-into the container. If System Settings and the saver end up reading different
-domains, fall back to a JSON file in
-`~/Library/Application Support/OSRSMapSaver/settings.json` (read in the saver,
-written by the sheet) — the appex can read the real home but **cannot write**
-there, so such a fallback would have to be written by an installer helper or from
-the sheet while running in a writable context. Test `ScreenSaverDefaults` first;
-it is the intended API.
-
-### 7.3 Proposed architecture
+The old worry — that `ScreenSaverDefaults` might be redirected into the container
+and end up in a different domain than the one System Settings writes — does not
+happen. Inside the sandbox the domain is still **`org.osrsmapsaver.saver`**, but
+it is stored in the *host's* container:
 
 ```
-macos/Saver/
-├── SaverSettings.swift      # Codable struct + ScreenSaverDefaults load/save,
-│                            #   defaults table, sanitising/clamping
-├── OptionsWindow.swift      # programmatic NSWindow + NSStackView/NSGridView form
-└── (OSRSMapSaverView)      # hasConfigureSheet/configureSheet, builds query from settings
+~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Preferences/ByHost/org.osrsmapsaver.saver.<UUID>.plist
 ```
 
-- `SaverSettings` becomes a `struct` with every knob (dwell, fps, distance, fog,
-  sky, npcChance, era mode, eraEvery, min/max flight, labels, fov jitter,
-  default cache, per-display policy, worker count, smoothing τ…), plus
-  `static func load() -> SaverSettings` / `func save()`.
-- `OSRSMapSaverView.startWebContent()` builds the query from `SaverSettings.load()`
-  instead of hard-coded literals.
-- `configureSheet` lazily creates `OptionsWindow` (keep it as a stored property so
-  the sheet window is retained). On OK: save → if the web view is running, either
-  `webView.reload()` with the new query (simplest) or apply live via
-  `evaluateJavaScript("window.__ambient?.applyOptions(...)")` (nice, but needs a
-  new hook). Reload is fine: the cache lives in CacheStorage, so it is fast.
-- Cache list for the dropdown: parse
-  `~/Library/Application Support/OSRSMapSaver/caches/caches.json`
-  (`name`, `game`, `revision`, `timestamp`, `size`) — exactly what
-  `repo/scripts/fetch-cache.mjs` writes. Show “OSRS rev 241 (213 MB)” style
-  labels. A “Download another cache…” button could shell out…… **no**, the appex
-  cannot spawn processes; instead point users at `node repo/scripts/fetch-cache.mjs …`
-  or implement an in-page download later.
-- Sheet controls worth including (macOS-native: `NSSlider`, `NSStepper`,
-  `NSPopUpButton`, `NSSwitch`/`NSButton(.switch)`, `NSColorWell`,
-  `NSLevelIndicator`?):
-  - **Cache**: popup (latest / 2005 / specific) + "rotation" `era` (off/mixed)
-    and `eraevery`.
-  - **Pacing**: `dwell` (5–300 s), `fade` (0.3–3 s).
-  - **Camera**: `fps`, `distance`, `fog`, `sky` colour well, `labels` toggle.
-  - **Motion**: `npc` chance, `minflight`/`maxflight`, maybe motion weights
-    (orbit/pan/drift/push) — needs a new URL param (`weights=3,2,2,1.6`).
-  - **Displays**: “play on: external only / all displays / main only” —
-    new native setting consumed by `shouldPlayOnThisDisplay`.
-  - **Advanced**: worker count, `debug` HUD toggle, “Reset to defaults”.
-- Persist on OK, clamp/sanitise every value (the values become a URL query).
+That is persistent and consistent (preview and full-screen runs use the same
+appex), so **no `settings.json` fallback is needed**. Note it is a `ByHost`
+(machine-specific) domain, so `defaults read org.osrsmapsaver.saver` from a normal
+shell will *not* show it — read the plist above, or
+`defaults -currentHost read org.osrsmapsaver.saver`.
 
-### 7.4 Testing plan
+`SaverSettings.preferenceFiles()` scans the likely plist directories and is logged
+whenever the sheet is built or saved, so this stays verifiable.
 
-1. `--show-options` flag in `Host/main.swift`: instantiate the view, call
-   `hasConfigureSheet`/`configureSheet`, present the sheet on the harness window.
-   Verify layout and save/load round-trip (`defaults read org.osrsmapsaver.saver`).
-2. Manual: System Settings → Screen Saver → RuneScape World → **Options…**.
-   Confirm the sheet appears and the saver picks up the new settings after
-   previewing again (the engine recreates the view).
-3. Add a few “sane” presets (e.g. *Cinematic*, *Chill*, *Low power* → fps 20,
-   distance 224, npc 0.7).
+### 7.3 Gotchas found while wiring it
 
----
+- End the sheet with `window.sheetParent?.endSheet(window)`, falling back to
+  `NSApp.endSheet` — `NSApp.endSheet` is deprecated and does not always have a
+  parent to talk to.
+- Do not reparent or resize the web view when the sheet opens; the sheet belongs to
+  the host window, not to the saver view.
+- Store the sheet window in a property, otherwise it is deallocated while on screen.
+- In the sandboxed harness, `print()` to a redirected stdout is block-buffered —
+  `setvbuf(stdout, nil, _IONBF, 0)` (otherwise diagnostics appear to vanish).
+
+### 7.4 Still open
+
+- Motion/flight tunables are still hard-coded in `scenes.ts` (`createFlight()` cruise
+  speed, duration clamp, arc height; per-motion ranges; `PoseSmoother(0.14)`; NPC
+  smoothing `0.22`). Exposing them needs new URL params plus sheet controls.
+- Worker count / `lite` profile is not in the sheet.
+- Display policy ("external only / all / main") is native-only and not user
+  configurable yet — it belongs in `SaverSettings` + `shouldPlayOnThisDisplay`.
+- Presets (Cinematic / Chill / Low power) would be ~30 lines on top of
+  `SaverSettings`.
+- Live apply (`window.__ambient.applyOptions(...)`) instead of a reload.
 
 ## 8. Known limitations / possible follow-ups
 
@@ -339,14 +293,14 @@ macos/Saver/
   `WKWebView`). Current policy avoids the cost by playing on one display only.
 - First launch in the saver downloads the cache into WebKit's container
   (a few seconds from localhost). Nothing prefetches it for the user.
-- Caches live behind a **symlink** to `repo/caches` right now
-  (`~/Library/Application Support/OSRSMapSaver/caches`). If the repo moves,
-  replace it with a real copy (`rm` + rerun `./install.sh`).
+- On *this* machine the caches are still behind a symlink to `repo/caches`
+  (`~/Library/Application Support/OSRSMapSaver/caches`); `install.sh` now copies
+  them into the support directory for fresh installs. If the repo moves here,
+  replace the symlink with a real copy (`rm` + `./install.sh --caches`).
 - `legacyScreenSaver` sometimes gets (re)spawned by `wallpaper.agent` and keeps
   the saver running as a wallpaper after unlock — macOS 26 behaviour, not ours.
 - Flight/camera tunables are hard-coded; making motion weights and speed
   URL-configurable would let the options sheet expose them.
-- `SaverSettings.fpsLimit` is dead code waiting for the options sheet.
 - The zone list is hand-curated; adding per-zone `fov`/`motion` preferences would
   improve specific spots.
 - Upstream re-sync: the fork is `dennisdev/rs-map-viewer` at `d3c569b`; our work is
@@ -355,7 +309,34 @@ macos/Saver/
 
 ---
 
-## 9. Commands cheat sheet
+## 9. Publishing
+
+Two public repositories:
+
+| repo | contents |
+| --- | --- |
+| `torytyler/osrs-map-screensaver` | this directory (native saver, scripts, docs, media) |
+| `torytyler/rs-map-viewer` | fork of `dennisdev/rs-map-viewer` with `src/ambient/` |
+
+`repo/` stays gitignored here; `install.sh` clones the viewer fork into `repo/`
+when it is missing. `scripts/fetch-caches.py` is a `python3`-stdlib-only port of
+`repo/scripts/fetch-cache.mjs`, used by `install.sh --binary` so the prebuilt path
+needs no Node.js (verified byte-identical output).
+
+Release asset `OSRSMapSaver.saver.zip` contains the built bundle (web build
+included), `fetch-caches.py` and `INSTALL.txt`. The banner in `media/` is a 32:9
+crop of `header.mp4` (`crop=1024:288:0:126`, i.e. the laptop screen stays centred):
+
+```sh
+# GIF for the README (896x252, 10 fps, palette + lossy, ~3 MB)
+ffmpeg -i header.mp4 -vf "crop=1024:288:0:126,hqdn3d=2:2:5:5,scale=896:-2:flags=lanczos,fps=10,\
+split[a][b];[a]palettegen=stats_mode=diff:max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" \
+  -loop 0 /tmp/b.gif && gifsicle -O3 --lossy=80 /tmp/b.gif -o media/banner.gif
+ffmpeg -i header.mp4 -vf "crop=1024:288:0:126" -an -c:v libvpx-vp9 -crf 34 -b:v 0 media/banner.webm
+ffmpeg -i header.mp4 -vf "crop=1024:288:0:126" -an -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart media/banner.mp4
+```
+
+## 10. Commands cheat sheet
 
 ```sh
 # rebuild everything and install

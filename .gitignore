@@ -1,9 +1,12 @@
-# The web app is its own git clone (fork of dennisdev/rs-map-viewer) with the
-# ambient engine committed inside it. Version it separately.
+# The web app is a separate clone of the viewer fork
+# (https://github.com/torytyler/rs-map-viewer), fetched by install.sh.
 repo/
 
 # native build products
 macos/build/
+
+# raw recording the banner was cropped from (~8 MB); media/ holds the derivatives
+header.mp4
 
 # macOS / logs
 .DS_Store
