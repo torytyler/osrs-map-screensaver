@@ -232,6 +232,16 @@ cache to use.
 - Override `configureSheet` → return a window (build it programmatically or from
   a NIB). The system runs it as a sheet; the window must contain its own
   **Cancel** / **OK** (or "Done") buttons.
+
+```swift
+// OSRSMapSaverView.swift (currently `hasConfigureSheet` returns false)
+override var hasConfigureSheet: Bool { true }
+
+override var configureSheet: NSWindow? {
+    if optionsWindow == nil { optionsWindow = OptionsWindow(settings: .load()) }
+    return optionsWindow
+}
+```
 - End the modal session yourself, exactly as documented:
 
 ```swift
