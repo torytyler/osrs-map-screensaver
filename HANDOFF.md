@@ -302,6 +302,12 @@ whenever the sheet is built or saved, so this stays verifiable.
   `.sha256` sidecar to `~/Documents/osrs_map_screensaver-offline/`.
   `install.sh --offline <archive>` restores it, and macOS `tar` reads `.tar.zst`
   with no extra tools, so a reinstall needs no Node and no network for the caches.
+- The same archive is published as its own release (`tag = caches-YYYY-MM-DD`,
+  asset `osrs-caches-YYYY-MM-DD.tar.zst` + `.sha256`). `install.sh` knows it via
+  the `CACHE_RELEASE` / `CACHE_ASSET` / `CACHE_MIRROR_URL` constants at the top;
+  `--caches-mirror` downloads that instead of hitting OpenRS2. **Bump those three
+  constants whenever a new snapshot is published**, otherwise `--caches-mirror`
+  keeps serving the old tag.
 - `legacyScreenSaver` sometimes gets (re)spawned by `wallpaper.agent` and keeps
   the saver running as a wallpaper after unlock — macOS 26 behaviour, not ours.
 - Flight/camera tunables are hard-coded; making motion weights and speed

@@ -3,12 +3,15 @@
 #
 #   ./install.sh             build everything from source and install
 #   ./install.sh --source    same thing, explicit
-#   ./install.sh --binary    download the prebuilt .saver from GitHub Releases
-#   ./install.sh --caches    only (re)download the RuneScape caches
-#   ./install.sh --offline <archive.tar.zst>   restore caches from a local snapshot
+#   ./install.sh --binary    install the prebuilt .saver from GitHub Releases
+#   ./install.sh --caches    only fetch/repair the RuneScape caches
 #
-# Combine --offline with --binary or --source to install without touching the
-# network for the 250 MB cache download (see scripts/caches-backup.sh).
+# Cache sources (pick one when archive.openrs2.org is unreachable):
+#
+#   --caches-mirror          download the cache snapshot from this project's
+#                            releases instead of archive.openrs2.org
+#   --offline <archive>      restore from a local .tar.zst/.tar.gz snapshot
+#                            (see scripts/caches-backup.sh)
 #
 # Source mode needs Node.js (>=18) and Xcode Command Line Tools.
 # Binary mode needs only curl, unzip and python3.
@@ -19,20 +22,29 @@ cd "$(dirname "$0")"
 VIEWER_REPO="${VIEWER_REPO:-https://github.com/torytyler/rs-map-viewer.git}"
 BINARY_URL="${BINARY_URL:-https://github.com/torytyler/osrs-map-screensaver/releases/latest/download/OSRSMapSaver.saver.zip}"
 
+# Cache snapshot published as its own release; bump both when re-snapshotting.
+CACHE_RELEASE="${CACHE_RELEASE:-caches-2026-10-30}"
+CACHE_ASSET="${CACHE_ASSET:-osrs-caches-2026-10-30.tar.zst}"
+CACHE_MIRROR_URL="${CACHE_MIRROR_URL:-https://github.com/torytyler/osrs-map-screensaver/releases/download/$CACHE_RELEASE/$CACHE_ASSET}"
+
 DESTINATION="$HOME/Library/Screen Savers"
 SUPPORT="$HOME/Library/Application Support/OSRSMapSaver"
 CACHE_DIR="$SUPPORT/caches"
 
 MODE="source"
 OFFLINE_ARCHIVE=""
+USE_MIRROR=0
+BUNDLED_FETCHER=""
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --binary) MODE="binary" ;;
         --source) MODE="source" ;;
         --caches) MODE="caches-only" ;;
+        --caches-mirror|--mirror) USE_MIRROR=1 ;;
         --offline) shift; OFFLINE_ARCHIVE="${1:?--offline needs an archive path}" ;;
         -h|--help)
-            sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -79,6 +91,25 @@ restore_caches_archive() {
     say "Caches restored ($(du -sh "$CACHE_DIR" | cut -f1))"
 }
 
+download_mirror_archive() {
+    command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 1; }
+
+    local staging
+    staging="$(mktemp -d)"
+
+    say "Downloading cache snapshot from the release (~209 MB)"
+    echo "    $CACHE_MIRROR_URL"
+    if ! curl -fL --progress-bar "$CACHE_MIRROR_URL" -o "$staging/$CACHE_ASSET"; then
+        rm -rf "$staging"
+        echo "error: download failed. Try again, or fetch a snapshot by hand" >&2
+        echo "       (see scripts/caches-backup.sh --help)." >&2
+        exit 1
+    fi
+
+    restore_caches_archive "$staging/$CACHE_ASSET"
+    rm -rf "$staging"
+}
+
 fetch_caches() {
     if [ -f "$CACHE_DIR/caches.json" ]; then
         say "Caches already present in $CACHE_DIR"
@@ -90,18 +121,41 @@ fetch_caches() {
         return
     fi
 
+    if [ "$USE_MIRROR" -eq 1 ]; then
+        download_mirror_archive
+        return
+    fi
+
     mkdir -p "$CACHE_DIR"
-    say "Downloading RuneScape caches (~250 MB, one time)"
+    say "Downloading RuneScape caches from the OpenRS2 archive (~250 MB, one time)"
 
     if [ -f "scripts/fetch-caches.py" ]; then
-        python3 scripts/fetch-caches.py --dir "$CACHE_DIR"
-    elif [ -f "repo/scripts/fetch-cache.mjs" ] && command -v node >/dev/null 2>&1; then
-        (cd repo && node scripts/fetch-cache.mjs)
-        cp -R repo/caches/. "$CACHE_DIR/"
-    else
-        echo "error: no cache fetcher available (need scripts/fetch-caches.py or node)" >&2
-        exit 1
+        python3 scripts/fetch-caches.py --dir "$CACHE_DIR" || cache_download_failed
+        return
     fi
+    if [ -n "$BUNDLED_FETCHER" ] && [ -f "$BUNDLED_FETCHER" ]; then
+        python3 "$BUNDLED_FETCHER" --dir "$CACHE_DIR" || cache_download_failed
+        return
+    fi
+    if [ -f "repo/scripts/fetch-cache.mjs" ] && command -v node >/dev/null 2>&1; then
+        (cd repo && node scripts/fetch-cache.mjs) || cache_download_failed
+        rm -rf "$CACHE_DIR"
+        cp -R repo/caches "$CACHE_DIR"
+        return
+    fi
+
+    echo "error: no cache fetcher available (need scripts/fetch-caches.py or node)" >&2
+    echo "       try: ./install.sh --caches --caches-mirror" >&2
+    exit 1
+}
+
+cache_download_failed() {
+    echo "error: could not download the caches from archive.openrs2.org" >&2
+    echo "       retry with the published snapshot instead:" >&2
+    echo "         ./install.sh --caches --caches-mirror" >&2
+    echo "       or restore a local archive:" >&2
+    echo "         ./install.sh --caches --offline <archive.tar.zst>" >&2
+    exit 1
 }
 
 restart_host() {
@@ -125,6 +179,8 @@ Snapshot it (so a reinstall never needs archive.openrs2.org again):
   ./scripts/caches-backup.sh create
 Restore it later:
   ./install.sh --offline ~/Documents/osrs_map_screensaver-offline/osrs-caches-YYYY-MM-DD.tar.zst
+Or take the published snapshot instead of OpenRS2:
+  ./install.sh --caches --caches-mirror
 EOF
 }
 
@@ -140,7 +196,7 @@ case "$MODE" in
         done
 
         work="$(mktemp -d)"
-        trap 'rm -rf "$work"' EXIT
+        trap 'rm -rf "${work:-}"' EXIT
 
         say "Downloading prebuilt screen saver"
         curl -fL --progress-bar "$BINARY_URL" -o "$work/saver.zip"
@@ -148,15 +204,8 @@ case "$MODE" in
 
         install_bundle "$work/OSRSMapSaver.saver"
 
-        if [ ! -f "$CACHE_DIR/caches.json" ]; then
-            if [ -n "$OFFLINE_ARCHIVE" ]; then
-                restore_caches_archive "$OFFLINE_ARCHIVE"
-            elif [ -f "$work/fetch-caches.py" ]; then
-                mkdir -p "$CACHE_DIR"
-                say "Downloading RuneScape caches (~250 MB, one time)"
-                python3 "$work/fetch-caches.py" --dir "$CACHE_DIR"
-            fi
-        fi
+        BUNDLED_FETCHER="$work/fetch-caches.py"
+        fetch_caches
 
         restart_host
         finish

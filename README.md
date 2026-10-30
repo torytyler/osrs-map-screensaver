@@ -75,6 +75,17 @@ the caches are never fetched from the internet:
 ./install.sh --caches  --offline <archive>         # just repair the cache folder
 ```
 
+The same snapshot is also published here, so a fresh machine does not depend on
+OpenRS2 at all:
+
+```sh
+./install.sh --caches --caches-mirror     # pulls the archive from the releases page
+```
+
+([snapshot release](https://github.com/torytyler/osrs-map-screensaver/releases/tag/caches-2026-10-30),
+209 MB, with a `.sha256`.) It is a point-in-time copy — OpenRS2 is still the way
+to get *newer* revisions, and the Options sheet lists whatever is installed.
+
 An archive is `caches.json` plus one directory per revision (`osrs-241_2026-10-28`,
 `rs2-295_2005-02-21`) holding the raw `main_file_cache.*` files and `keys.json`.
 macOS `tar` reads `.tar.zst` natively, so no extra tools are required to restore.
@@ -218,8 +229,9 @@ damaged. `xattr -dr com.apple.quarantine ~/Library/Screen\ Savers/OSRSMapSaver.s
 (or use `./install.sh --binary`, which curls it instead).
 
 **Wrong RuneScape revision / empty cache list.** `./install.sh --caches` re-downloads
-the caches; the Options sheet lists whatever is in `caches.json`. With a snapshot,
-`./install.sh --caches --offline <archive>` restores it instead.
+the caches; the Options sheet lists whatever is in `caches.json`. If
+archive.openrs2.org is unreachable use `--caches-mirror` (published snapshot) or
+`--offline <archive>` (local snapshot).
 
 ## Uninstall
 
