@@ -1,0 +1,10 @@
+# The web app is its own git clone (fork of dennisdev/rs-map-viewer) with the
+# ambient engine committed inside it. Version it separately.
+repo/
+
+# native build products
+macos/build/
+
+# macOS / logs
+.DS_Store
+*.log
