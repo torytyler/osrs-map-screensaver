@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let optionsOkAfter: Double?
     private let optionsScreenshot: String?
     private let optionsEdit: Bool
+    private let viaAppBeginSheet: Bool
     private let optionsCancelAfter: Double?
 
     init(
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         optionsOkAfter: Double?,
         optionsScreenshot: String?,
         optionsEdit: Bool,
+        viaAppBeginSheet: Bool,
         optionsCancelAfter: Double?
     ) {
         self.fullscreen = fullscreen
@@ -40,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.optionsOkAfter = optionsOkAfter
         self.optionsScreenshot = optionsScreenshot
         self.optionsEdit = optionsEdit
+        self.viaAppBeginSheet = viaAppBeginSheet
         self.optionsCancelAfter = optionsCancelAfter
     }
 
@@ -156,13 +159,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         print("sheet title=\(sheet.title) frame=\(sheet.frame) styleMask=\(sheet.styleMask.rawValue)")
+        print("sheet canBecomeKey=\(sheet.canBecomeKey) canBecomeMain=\(sheet.canBecomeMain) "
+            + "contentView=\(sheet.contentView != nil) releasedWhenClosed=\(sheet.isReleasedWhenClosed)")
         print("sheet buttons: \(buttonTitles(in: sheet.contentView))")
         print("sheet labels: \(labelTexts(in: sheet.contentView))")
 
-        window.beginSheet(sheet) { response in
-            print("sheet dismissed: response=\(response.rawValue)")
+        if viaAppBeginSheet {
+            NSApp.beginSheet(sheet, modalFor: window, modalDelegate: nil, didEnd: nil, contextInfo: nil)
+        } else {
+            window.beginSheet(sheet) { response in
+                print("sheet dismissed: response=\(response.rawValue)")
+            }
         }
-        print("sheet presented = \(sheet.isSheet)")
+        print("sheet presented = \(sheet.isSheet) isVisible = \(sheet.isVisible) key = \(sheet.isKeyWindow)")
 
         if let path = optionsScreenshot {
             // A short delay lets AppKit finish its first layout pass.
@@ -335,6 +344,7 @@ let delegate = AppDelegate(
     optionsOkAfter: optionsOkAfter,
     optionsScreenshot: optionsScreenshot,
     optionsEdit: args.contains("--options-edit"),
+    viaAppBeginSheet: args.contains("--options-via-app"),
     optionsCancelAfter: optionsCancelAfter
 )
 app.delegate = delegate

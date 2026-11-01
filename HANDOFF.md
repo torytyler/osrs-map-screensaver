@@ -267,6 +267,39 @@ whenever the sheet is built or saved, so this stays verifiable.
 
 ### 7.3 Gotchas found while wiring it
 
+**The sheet must be able to become key.** Inside `legacyScreenSaver.appex` the
+host attaches our window as a sheet and then calls `makeKeyWindow`, which asks the
+window `canBecomeKeyWindow`. For a plain `NSWindow` subclass with
+`.titled` that should answer YES, but in the appex it answered **NO** on this
+machine — and the result is a sheet that is built and attached but never becomes
+interactive (System Settings looks like it does nothing; the only trace is one
+line in the system log):
+
+```
+Warning: -[NSWindow makeKeyWindow] called on <OSRSMapSaver.OptionsWindow>
+which returned NO from -[NSWindow canBecomeKeyWindow].
+```
+
+`OptionsWindow` now overrides `canBecomeKey -> true` (and `canBecomeMain ->
+false`), which fixed it. While debugging this the sheet had also grown past the
+host window's height (701pt after adding a row), so `OptionsWindow` now keeps its
+content at or below 640pt and clamps to `visibleFrame.height - 120`. If a future
+change makes the sheet grow, test **in System Settings**, not just in the
+harness — the harness presents sheets happily at sizes the host will not.
+
+Diagnostics for this path are in the `configure sheet built:` log line: thread,
+size, `canBecomeKey` and `styleMask`. Check it with
+
+```sh
+grep "configure sheet built" \
+  ~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Logs/saver.log
+```
+
+`configureSheet` also hops to the main thread if the host asks from its extension
+queue (building AppKit windows off-main is not supported), and the harness has
+`--options-via-app` to present the sheet with `NSApp.beginSheet` the way the host
+does.
+
 - End the sheet with `window.sheetParent?.endSheet(window)`, falling back to
   `NSApp.endSheet` — `NSApp.endSheet` is deprecated and does not always have a
   parent to talk to.

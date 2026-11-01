@@ -104,6 +104,15 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
     /// The host runs this window as a sheet; it is retained here so repeated
     /// visits to System Settings reuse the same instance.
     override var configureSheet: NSWindow? {
+        // AppKit windows must be built on the main thread; the host may ask from
+        // its extension queue, which leaves the window unable to become key.
+        if !Thread.isMainThread {
+            SaverLog.append("configure sheet requested off the main thread -> hopping")
+            var sheet: NSWindow?
+            DispatchQueue.main.sync { sheet = self.configureSheet }
+            return sheet
+        }
+
         if optionsWindow == nil {
             let caches = CacheOption.load(bundle: saverBundle)
             let window = OptionsWindow(settings: SaverSettings.load(), caches: caches)
@@ -113,7 +122,10 @@ final class OSRSMapSaverView: ScreenSaverView, WKNavigationDelegate {
             optionsWindow = window
 
             SaverLog.append(
-                "configure sheet built: caches=\(caches.map(\.name)) "
+                "configure sheet built: thread=\(Thread.isMainThread ? "main" : "other") "
+                    + "size=\(Int(window.frame.width))x\(Int(window.frame.height)) "
+                    + "canBecomeKey=\(window.canBecomeKey) styleMask=\(window.styleMask.rawValue) "
+                    + "caches=\(caches.map(\.name)) "
                     + "screenSaverDefaults=\(SaverSettings.usesScreenSaverDefaults) "
                     + "prefs=\(SaverSettings.preferenceFiles())"
             )

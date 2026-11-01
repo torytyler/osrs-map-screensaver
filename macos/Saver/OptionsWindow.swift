@@ -49,6 +49,15 @@ final class OptionsWindow: NSWindow {
         apply(settings)
     }
 
+    /// The screen saver host attaches this to a window of its own; AppKit derives a
+    /// sheet's keyability from the parent, and inside the sandboxed appex it
+    /// otherwise answers NO — which leaves the sheet inert (no clicks reach it).
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    /// Kept small enough that the host can always fit it on screen.
+    private static let maxHeight: CGFloat = 640
+
     // MARK: - Interface
 
     private func buildInterface() {
@@ -57,7 +66,7 @@ final class OptionsWindow: NSWindow {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 14
+        stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         stack.addArrangedSubview(section("World"))
@@ -138,7 +147,9 @@ final class OptionsWindow: NSWindow {
         contentView = content
         content.layoutSubtreeIfNeeded()
         let fitting = stack.fittingSize
-        setContentSize(NSSize(width: max(560, fitting.width + 40), height: fitting.height + 40))
+        let screenLimit = (NSScreen.main?.visibleFrame.height ?? 900) - 120
+        let height = min(fitting.height + 40, min(Self.maxHeight, screenLimit))
+        setContentSize(NSSize(width: max(560, fitting.width + 40), height: height))
     }
 
     private func section(_ title: String) -> NSView {
@@ -161,7 +172,7 @@ final class OptionsWindow: NSWindow {
             return [label, control]
         }
         let grid = NSGridView(views: views)
-        grid.rowSpacing = 8
+        grid.rowSpacing = 6
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .leading
