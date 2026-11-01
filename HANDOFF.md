@@ -397,7 +397,18 @@ when it is missing. `scripts/fetch-caches.py` is a `python3`-stdlib-only port of
 needs no Node.js (verified byte-identical output).
 
 Release asset `OSRSMapSaver.saver.zip` contains the built bundle (web build
-included), `fetch-caches.py` and `INSTALL.txt`. The banner in `media/` is a 32:9
+included), `fetch-caches.py` and `INSTALL.txt`. Build it with
+`scripts/make-release-zip.sh` — **never** with a bare `zip -r` into a path that
+already exists: `zip` updates archives instead of replacing them, which once
+shipped a 0.2.0 asset mixing the 0.1.0 and 0.2.0 web builds. Those extra files are
+not in `_CodeSignature/CodeResources`, so the seal is invalid and the appex fails
+at load time. The script wipes the target, then round-trips the zip and checks
+`codesign --verify --deep --strict` plus "exactly one `main.*.js`".
+
+One more publishing gotcha: after re-uploading an asset, GitHub's CDN can keep
+serving the previous object at the same URL for a few minutes. `curl` the plain
+`releases/latest/download/...` URL and compare `shasum -a 256` with your local zip
+before believing an install test. The banner in `media/` is a 32:9
 crop of `header.mp4` (`crop=1024:288:0:126`, i.e. the laptop screen stays centred):
 
 ```sh
