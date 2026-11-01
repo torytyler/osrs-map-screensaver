@@ -225,6 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let caption = switches.first {
             caption.state = caption.state == .on ? .off : .on
         }
+        // Second switch is "Hide sky & void"; turn it on to prove the nosky param.
+        if switches.count > 1 {
+            switches[1].state = .on
+        }
         print("edited the sheet")
     }
 

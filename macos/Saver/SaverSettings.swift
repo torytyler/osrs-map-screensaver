@@ -174,6 +174,7 @@ struct SaverSettings: Equatable {
     var minFlight: Int = 140        // below this distance we cut instead of fly
     var maxFlight: Int = 950        // above this distance we cut instead of fly
     var labels: Bool = true         // zone caption
+    var hideSky: Bool = false       // never show sky / void: tilt down + zoom in
     var debugHUD: Bool = false      // state HUD on top of the viewer
     var cache: String = ""          // "" = whatever the viewer calls latest
 
@@ -247,6 +248,7 @@ struct SaverSettings: Equatable {
         static let minFlight = "minFlight"
         static let maxFlight = "maxFlight"
         static let labels = "labels"
+        static let hideSky = "hideSky"
         static let debugHUD = "debugHUD"
         static let cache = "cache"
     }
@@ -294,6 +296,9 @@ struct SaverSettings: Equatable {
         if let value = boolean(store, Key.labels) {
             settings.labels = value
         }
+        if let value = boolean(store, Key.hideSky) {
+            settings.hideSky = value
+        }
         if let value = boolean(store, Key.debugHUD) {
             settings.debugHUD = value
         }
@@ -319,6 +324,7 @@ struct SaverSettings: Equatable {
         store.set(minFlight, forKey: Key.minFlight)
         store.set(maxFlight, forKey: Key.maxFlight)
         store.set(labels, forKey: Key.labels)
+        store.set(hideSky, forKey: Key.hideSky)
         store.set(debugHUD, forKey: Key.debugHUD)
         store.set(cache, forKey: Key.cache)
         store.synchronize()
@@ -329,7 +335,7 @@ struct SaverSettings: Equatable {
         for key in [
             Key.dwell, Key.fade, Key.fps, Key.distance, Key.fog, Key.sky,
             Key.npcChance, Key.era, Key.eraEvery, Key.minFlight, Key.maxFlight,
-            Key.labels, Key.debugHUD, Key.cache,
+            Key.labels, Key.hideSky, Key.debugHUD, Key.cache,
         ] {
             store.removeObject(forKey: key)
         }
@@ -378,6 +384,7 @@ struct SaverSettings: Equatable {
         query += "&minflight=\(minFlight)"
         query += "&maxflight=\(maxFlight)"
         query += "&labels=\(labels ? 1 : 0)"
+        if hideSky { query += "&nosky=1" }
 
         if !cache.isEmpty, cache != "latest" {
             query += "&cache=\(cache.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cache)"

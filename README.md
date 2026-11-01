@@ -98,7 +98,7 @@ The standard macOS configure sheet, everything written as clamped values:
 | --- | --- |
 | World | which cache to use (any installed revision), era rotation (`current + 2005`, `current only`, `2005 only`), how often the era switches |
 | Pacing | scene duration (5–300 s), cross-fade for long jumps |
-| Camera | frame rate, render distance, fog band, sky colour, zone caption |
+| Camera | frame rate, render distance, fog band, sky colour, zone caption, **hide sky & void** |
 | Motion | how often a scene follows an NPC, the jump-cut distance window |
 | Advanced | in-page debug HUD, reset to defaults |
 
@@ -130,9 +130,24 @@ Opt-in, so the normal viewer is untouched — append them to any viewer URL
 | `eraevery` | `4` | zones between era switches |
 | `minflight` / `maxflight` | `140` / `950` | distance window where we fly instead of cut |
 | `labels` | `1` | zone name caption |
+| `nosky` | `0` | never show unmapped space: tilt down and zoom in until the frame is all map |
 | `debug` | `0` | state/FPS overlay |
 | `seed` | random | deterministic zone rotation |
 | `lite` | – | low-cost profile (1 worker) |
+
+### Hiding the sky
+
+`nosky=1` (or **Hide sky & void** in the options sheet) keeps empty space out of
+frame. The renderer has no skybox, so anything that is not a map square is the
+clear colour — above the horizon, past the streamed terrain, or in the holes and
+ragged edges of the map data. The camera is tilted down and the frame narrowed
+just enough that every visible pixel is terrain, with rate-limited corrections so
+scenes ease in and out of the constraint. Expect steeper, more top-down flights
+while it is on; that is the cost of never showing sky.
+
+It is measured, not vibes: with a magenta sky colour (so void pixels are trivially
+countable) the average share of out-of-map pixels over a 63-frame sweep across
+dwell scenes and flights went from **20.0% (max 36%)** to **0.03% (max 0.5%)**.
 
 ## How it works
 
@@ -160,6 +175,10 @@ The ambient engine lives in the viewer fork under `src/ambient/`:
   live (NPCs wander and animate in the upstream engine).
 - `cameraMath.ts` — RS angle/yaw/pitch conversions and a `PoseSmoother` low-pass,
   so map-streaming hitches and NPC tile steps never show as jitter.
+- `SkyGuard.ts` — optional "nothing but map" framing (`nosky=1`): probes the ground
+  footprint against the map's terrain grid and tilts/zooms until no sky, void or
+  map-data edge is in shot, and prefetches the squares under the far edge so
+  terrain never pops in as a hole.
 - `AmbientDirector.ts` — the state machine `black → dwell → (flight | fade) → …`,
   scene selection, prefetching along the flight path, era switching.
 - `AmbientOverlay.ts` — fade-to-black, zone caption, debug HUD (plain DOM, no

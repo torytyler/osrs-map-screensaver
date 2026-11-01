@@ -194,6 +194,7 @@ Defaults in `repo/src/ambient/AmbientConfig.ts`:
 | `era` | mixed | latest/legacy/mixed | cache rotation |
 | `eraevery` | 4 | 1–50 | zones between era switches |
 | `labels` | 1 | bool | zone caption |
+| `nosky` | 0 | bool | hide sky/void: tilt down + zoom in until the frame is all map |
 | `debug` | 0 | bool | state HUD |
 | `seed` | random | int | deterministic rotation |
 | `lite` | – | flag | 1 worker (`isLiteMode`) |
@@ -275,8 +276,36 @@ whenever the sheet is built or saved, so this stays verifiable.
 - In the sandboxed harness, `print()` to a redirected stdout is block-buffered —
   `setvbuf(stdout, nil, _IONBF, 0)` (otherwise diagnostics appear to vanish).
 
-### 7.4 Still open
+### 7.4 Sky guard (`nosky`)
 
+`src/ambient/SkyGuard.ts` — a toggle ("Hide sky & void" in the sheet) that keeps
+unmapped space out of frame. Geometry: for camera height `h` and a top-edge ray at
+`tilt - fov/2`, the ground is `h / tan(...)` away; the guard demands that distance
+stay inside `safeRadius = renderDistance - fogDepth` (min 96) by tilting down, and
+narrows the FOV when the tilt budget (74°) runs out. Then it samples the actual
+ground footprint (13 columns x 5 rings, from the bottom of the frame to the top)
+against the map's terrain grid (`MapManager.invalidMapIds` + square bounds) and
+keeps narrowing *while tightening removes unmapped samples* — a hole underfoot
+cannot be framed away, so it stops instead of collapsing the shot.
+
+Three gotchas worth knowing:
+
+- The map manager only queues squares that are **already inside the frustum**, so
+  the far edge of a moving shot spends ~1 s as a hole. `SkyGuard.edgePrefetchPoints`
+  (the footprint ring, pushed out by 1.12x) is loaded every 6 frames by the director.
+- Fog is not "the last N tiles of the draw distance": the shader fades inward from
+  the render-distance boundary, so `fogDepth` eats into the visible radius.
+- If a spot cannot be framed cleanly (data holes in the 2005 cache), `beginDwell()`
+  vetoes the zone and picks another (max 6 tries).
+
+Measured with a magenta sky (`sky=16711935`) so void pixels are countable, sweeping
+dwell + flights: **20.0% mean / 36% max out-of-map pixels with the guard off,
+0.03% mean / 0.54% max with it on**, every sampled frame `clean`.
+
+### 7.5 Still open
+
+- The sky guard's constants (FOV_MIN 14, TILT_MAX 74, HORIZON_MARGIN 2.5, slew
+  rates) are tuned for the default 320/96 camera; they are not URL-exposed.
 - Motion/flight tunables are still hard-coded in `scenes.ts` (`createFlight()` cruise
   speed, duration clamp, arc height; per-motion ranges; `PoseSmoother(0.14)`; NPC
   smoothing `0.22`). Exposing them needs new URL params plus sheet controls.

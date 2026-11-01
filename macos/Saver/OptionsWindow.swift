@@ -26,6 +26,7 @@ final class OptionsWindow: NSWindow {
     private let eraPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     private let skyWell = NSColorWell(frame: .zero)
     private let labelsSwitch = NSSwitch(frame: .zero)
+    private let hideSkySwitch = NSSwitch(frame: .zero)
     private let debugSwitch = NSSwitch(frame: .zero)
     private let footnote = NSTextField(labelWithString: "")
 
@@ -79,6 +80,7 @@ final class OptionsWindow: NSWindow {
             ("Fog", fogRow.view),
             ("Sky colour", labelled(skyWell, width: 60)),
             ("Scene caption", labelled(labelsSwitch, width: 60)),
+            ("Hide sky & void", labelled(hideSkySwitch, width: 60)),
         ]))
 
         stack.addArrangedSubview(section("Motion"))
@@ -180,6 +182,7 @@ final class OptionsWindow: NSWindow {
         settings.maxFlight = Int(maxFlightRow.value.rounded())
         settings.eraEvery = Int(eraEveryRow.value.rounded())
         settings.labels = labelsSwitch.state == .on
+        settings.hideSky = hideSkySwitch.state == .on
         settings.debugHUD = debugSwitch.state == .on
         settings.skyHex = OptionsWindow.hex(from: skyWell.color)
 
@@ -216,6 +219,7 @@ final class OptionsWindow: NSWindow {
 
         skyWell.color = OptionsWindow.color(fromHex: settings.skyHex)
         labelsSwitch.state = settings.labels ? .on : .off
+        hideSkySwitch.state = settings.hideSky ? .on : .off
         debugSwitch.state = settings.debugHUD ? .on : .off
 
         footnote.stringValue = "Saved in \(SaverSettings.moduleName) "
